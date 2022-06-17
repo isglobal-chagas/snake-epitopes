@@ -44,6 +44,11 @@ def init_argparser():
                               '--snake_species',
                               required=True
                               )
+    input_parser.add_argument('-m',
+                              '--mode',
+                              choices=['normal', 'exclusive'],
+                              default='normal'
+                              )
     return input_parser
 
 
@@ -362,6 +367,12 @@ def merge_epitopes(epitope_list):
 if __name__ == '__main__':
     parser = init_argparser()
     args = parser.parse_args()
+
+    # By default, secondary families won't be discarded. If mode is set to
+    # 'exclusive' then only primary families will be selected: SVMP, SVSP,
+    # 3FTX and PLA2, plus Kunitz for Dendroaspis and Safarotoxins
+    # for Atractaspis
+    selection_mode = args.mode
     excel_path = Path(args.excel)
     iedb_bcell_path = Path(args.iedb_bcell)
     iedb_tcell_path = Path(args.iedb_tcell)
@@ -369,6 +380,8 @@ if __name__ == '__main__':
     snake_spp_csv = Path(args.snake_species)
     clusters_dir = Path(args.clusters_dir)
 
+
+# %%
     root_output = mkdir(Path("./RESULTS/10_SCORING/"))
 
     iedb_b_epis = parse_iedb_b_csv(iedb_bcell_path)
@@ -529,15 +542,26 @@ if __name__ == '__main__':
             norm_scores = [x[11] for x in formated_records]
 
             best_records = []
+
+            for record in formated_records:
+                if record[10]:  # Has IEDB hit
+                    best_records.append(record)
+
             cluster_combs = set([x[2] for x in formated_records])
             for c_comb in cluster_combs:
                 curr_comb = [x for x in formated_records if x[2] == c_comb]
                 high_score = max([x[11] for x in curr_comb])
                 high_comb = [x for x in curr_comb if x[11] >= high_score]
                 sorted_comb = sorted(high_comb, key=lambda x: 1/len(x[5]))
-                best_records.append(sorted_comb[0])
+                best_record = sorted_comb[0]
+                if best_record not in best_records:
+                    best_records.append(best_record)
 
             selected_epis = []
+            for record in best_records:
+                if record[10]:  # Has IEDB hit
+                    selected_epis.append(record)
+
             covered_clusters = []
             for cluster in cluster_dict:
                 if cluster in covered_clusters:
@@ -549,7 +573,9 @@ if __name__ == '__main__':
                     if any(f_clust == cluster for f_clust in f_clustrs):
                         cluster_epis.append(f)
 
-                cluster_epis = [x for x in cluster_epis if x[11] > 0]
+                cluster_epis = [x for x in cluster_epis
+                                # if x[11] > 0
+                                ]
                 sorted_epis = sorted(cluster_epis,
                                      key=lambda x: (x[11], len(x[5])),
                                      reverse=True
@@ -581,6 +607,43 @@ if __name__ == '__main__':
                                                  "occurrences"
                                                  ]
                                         )
+
+    if selection_mode == 'exclusive':
+        selected_rows = []
+        important_families = ['SVMP', 'SVSP', 'PLA2', '3FTX']
+        special_geni = {'Dendroaspis': ([8623, 8624, 8621], 'kunitz'),
+                        'Atractaspis': ([512568], 'sarafotoxin')
+                        }
+        for ix, row in selected_epitopes_df.iterrows():
+            prot_name = row.proteins
+            if any(fam in prot_name.split('||')[2]
+                   for fam in important_families
+                   ):
+                selected_rows.append(list(row))
+                continue
+
+            for genus, genus_vals in special_geni.items():
+                if any(str(txid) in row.species for txid in genus_vals[0]):
+                    if genus_vals[1] in prot_name.lower():
+                        selected_rows.append(list(row))
+                        continue
+            continue
+        selected_epitopes_df = pd.DataFrame(selected_rows,
+                                            columns=["group",
+                                                     "cutoff",
+                                                     "clusters",
+                                                     "species",
+                                                     "proteins",
+                                                     "epitope",
+                                                     "min_depth",
+                                                     "max_depth",
+                                                     "seq_tier",
+                                                     "best_tier",
+                                                     "iedb",
+                                                     "score",
+                                                     "occurrences"
+                                                     ]
+                                            )
 
     covered_clusters_dict = {x: y for x, y in main_cluster_dict.items()}
     for group, cutoffs in covered_clusters_dict.items():
